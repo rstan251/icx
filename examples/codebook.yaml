@@ -1,17 +1,33 @@
 # Example ICX codebook for a generic agent fleet. Replace owners and codes with your own.
+# Publishes the shared label set: 10 ICX top-level classes and 10 ICOM work-state verbs.
+# Lane/client codes are not part of ICX; they live in the ICOM codebook as placeholders.
 icx:
-  version: 1.0.0
+  version: 1.1.0
   classes:
     - {code: org, name: "fleet, agents, rules, protocol", owner: chief-of-staff}
-    - {code: pr,  name: client products, owner: product-lead}
-    - {code: sys, name: infrastructure and platforms, owner: platform}
-    - {code: ops, name: process and delivery, owner: operations}
-    - {code: mk,  name: marketing and growth, owner: marketing}
-    - {code: fin, name: money, owner: operations}
-    - {code: lg,  name: legal and compliance, owner: chief-of-staff}
-    - {code: rs,  name: research and intel, owner: engineering}
-    - {code: dt,  name: data and reporting, owner: engineering}
+    - {code: pr,  name: "client products: voice, web, crm", owner: product-lead}
+    - {code: sys, name: "infrastructure and platforms", owner: platform}
+    - {code: ops, name: "process and delivery: deploy, qc, tickets", owner: operations}
+    - {code: mk,  name: "marketing and growth: content, outbound", owner: marketing}
+    - {code: fin, name: "money: invoice, spend", owner: operations}
+    - {code: lg,  name: "legal and compliance", owner: chief-of-staff}
+    - {code: rs,  name: "research and intel: evals", owner: engineering}
+    - {code: dt,  name: "data and reporting: kpi, dashboards", owner: engineering}
     - {code: x,   name: "unclassed, reclassify within 7 days", owner: editor}
+  # ICOM work-state verbs (header verb slot). The full ICOM verb list
+  # (including FYI, ACK, NAK) is defined in the ICOM standard:
+  # https://github.com/rstan251/icom-standard
+  verbs:
+    - {code: GO, name: start/approved to proceed}
+    - {code: HOLD, name: pause, do not proceed}
+    - {code: BLOCKED, name: cannot proceed}
+    - {code: ASK, name: question needing answer}
+    - {code: REC, name: recommendation}
+    - {code: DONE, name: completed}
+    - {code: DO, name: "task assigned, execute"}
+    - {code: DECIDE, name: decision required from lead/owner}
+    - {code: FAIL, name: "review/test failed, fix needed"}
+    - {code: PASS, name: review/test passed}
   codes:
     - {code: org.proto, name: communication protocol}
     - {code: org.rule, name: standing rules}

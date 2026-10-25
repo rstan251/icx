@@ -15,11 +15,47 @@ pr.voice.intake~cfg
 ## Part of ICOM
 ICX is the object vocabulary for [ICOM](https://github.com/rstan251/icom-standard), the open bot-to-bot communication standard. ICOM defines how agents talk (router, header, verbs, priorities); ICX defines what they talk about. ICOM's Rule 14 makes the header `object` slot an ICX code.
 
+The example codebook publishes the shared label set used with ICOM: the 10 ICX top-level classes and the 10 ICOM work-state verbs. Lane and client codes are not part of ICX (see Rule 3); they live in the ICOM codebook as placeholders.
+
+## Published label set
+
+### Top-level object classes (10)
+
+| Code | Class | Default owner in this example |
+|---|---|---|
+| `org` | fleet, agents, rules, protocol | chief-of-staff |
+| `pr` | client products: voice, web, crm | product-lead |
+| `sys` | infrastructure and platforms | platform |
+| `ops` | process and delivery: deploy, qc, tickets | operations |
+| `mk` | marketing and growth: content, outbound | marketing |
+| `fin` | money: invoice, spend | operations |
+| `lg` | legal and compliance | chief-of-staff |
+| `rs` | research and intel: evals | engineering |
+| `dt` | data and reporting: kpi, dashboards | engineering |
+| `x` | unclassed; reclassify within 7 days | editor |
+
+### ICOM work-state verbs (10)
+
+These occupy the ICOM header verb slot. The full ICOM verb list (including FYI, ACK, NAK) is defined in the [ICOM standard](https://github.com/rstan251/icom-standard).
+
+| Verb | Meaning |
+|---|---|
+| `GO` | start/approved to proceed |
+| `HOLD` | pause, do not proceed |
+| `BLOCKED` | cannot proceed |
+| `ASK` | question needing answer |
+| `REC` | recommendation |
+| `DONE` | completed |
+| `DO` | task assigned, execute |
+| `DECIDE` | decision required from lead/owner |
+| `FAIL` | review/test failed, fix needed |
+| `PASS` | review/test passed |
+
 ## How it maps to Dewey
 
 | Dewey Decimal | ICX |
 |---|---|
-| 10 main classes | 10 top classes |
+| 10 main classes | 10 top classes (`org` `pr` `sys` `ops` `mk` `fin` `lg` `rs` `dt` `x`) |
 | Divisions, sections, decimals | Dot segments; each one narrows its parent |
 | Cutter (author) number | The message's own client/account field. The client is never repeated inside the code. |
 | Standard subdivisions (Table 1) | Facets after `~`, valid on any class |
@@ -56,9 +92,9 @@ ICX is about precision and routing, not compression. Word segments cost about th
 
 | Path | What |
 |---|---|
-| `examples/codebook.yaml` | Example codebook: classes, codes, facets, tombstones |
+| `examples/codebook.yaml` | Example codebook: classes, work-state verbs, codes, facets, tombstones |
 | `examples/index.yaml` | Example relative index |
-| `tools/icx_validate.py` | Validator: segment rules, depth, parent prefixes, facets, tombstones, index targets |
+| `tools/icx_validate.py` | Validator: segment rules, depth, parent prefixes, verbs, facets, tombstones, index targets |
 
 ```bash
 pip install pyyaml

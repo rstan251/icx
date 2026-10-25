@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Validate an ICX codebook and its relative index.
 
+Checks class/code segments, optional work-state verbs, facets, tombstones, and index targets.
+
 Usage: icx_validate.py CODEBOOK.yaml INDEX.yaml
 Exit 0 when valid, 1 with one line per error otherwise.
 """
@@ -30,6 +32,15 @@ def main(codebook_path, index_path):
         if c["code"] in codes:
             errors.append(f"duplicate code: {c['code']}")
         codes[c["code"]] = c
+    verbs = cb.get("verbs", [])
+    verb_codes = set()
+    for v in verbs:
+        if not v.get("code") or not v.get("name"):
+            errors.append(f"verb missing code or name: {v}")
+            continue
+        if v["code"] in verb_codes:
+            errors.append(f"duplicate verb: {v['code']}")
+        verb_codes.add(v["code"])
     facets = {f["code"] for f in cb.get("facets", [])}
     tomb = {t["old"]: t["new"] for t in cb.get("tombstones", [])}
 
@@ -65,8 +76,8 @@ def main(codebook_path, index_path):
 
     for e in errors:
         print(e)
-    print(f"{'FAIL' if errors else 'OK'}: {len(codes)} codes, {len(facets)} facets, "
-          f"{len(tomb)} tombstones, {len(idx)} index terms")
+    print(f"{'FAIL' if errors else 'OK'}: {len(codes)} codes, {len(verbs)} verbs, "
+          f"{len(facets)} facets, {len(tomb)} tombstones, {len(idx)} index terms")
     return 1 if errors else 0
 
 
