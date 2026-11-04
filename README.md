@@ -59,17 +59,23 @@ These occupy the ICOM header verb slot. The full ICOM verb list (including FYI, 
 | `FAIL` | review/test failed, fix needed |
 | `PASS` | review/test passed |
 
-### Company codes (3)
+### Company shorthand (headers and tokens)
 
-These occupy the company prefix of the ICOM `CO.CLIENT` slot (Rule 14a).
+Agents write the 2-letter shorthand in the ICOM `CO.CLIENT` slot and in tokens. The full code is the canonical record. This table is the lookup for expanding shorthand to full code. An unregistered shorthand is NAKed like an unregistered ICX code (`why=icx.co.unk`).
 
-| Code | Company | Outbound `co=` |
-|---|---|---|
-| `IN` | Iron Noodle LLC | `iron-noodle` |
-| `CM` | Cogent Marketing LLC | `cogent-marketing` |
-| `CD` | Cogent Digital LLC | `cogent-digital` |
+| Short | Full | Company | Status | Outbound `co=` |
+|---|---|---|---|---|
+| `IN` | `I-MD-XXXX` | Iron Noodle LLC | unverified (Maryland unconfirmed; needs owner confirmation) | `iron-noodle` |
+| `CM` | `C-TBD-XXXX` | Cogent Marketing LLC | tbd (state and EIN last four pending) | `cogent-marketing` |
+| `CD` | `C-TBD-XXXX` | Cogent Digital LLC | tbd (state and EIN last four pending) | `cogent-digital` |
+
+Full-code form: `<first letter>-<2-letter state>-<last four EIN>`. Production regex: `^[A-Z]-[A-Z]{2}-(\d{4}|XXXX)$`. `TBD` is the pending-state token until a 2-letter state is assigned. The public repo ships `XXXX` only; real EIN last four live in the private registry.
+
+Both Cogent entities share the letter `C`. They are told apart by state and EIN last four, so the validator must not treat `C` alone as unique. Prefix routing uses the shorthand (`CM` vs `CD`), not the first letter of the full code.
 
 `INT0` is the internal / no-client lane. It is valid under any company. Default: `IN.INT0`.
+
+Customer ids, customer shorthand, and customer names live only in the private registry. Real assignments are TBD. The repo ships fake placeholders in `clients.example.yaml` (`id: 0000`, `short: ABC`, `name: Example Client`).
 
 ## How it maps to Dewey
 
@@ -102,14 +108,14 @@ The header `object` slot holds a Dewey-style ICX concept code: class.division.se
 
 ## Rule 14a: Company and client designation
 
-1. The CLIENT/LANE slot is `COMPANY.CLIENT`, e.g. `CM.ABC`, `IN.INT0`. Company codes (public, in the codebook under `companies`): `IN` = Iron Noodle LLC, `CM` = Cogent Marketing LLC, `CD` = Cogent Digital LLC. `INT0` = internal/no client lane, valid under any company (default `IN.INT0`).
-2. Backward compatible: a bare registered client code (e.g. `ABC`) stays valid. The router/validator resolves its company from the client registry. Default parent company for clients is `CM` (Cogent Marketing) unless the registry says otherwise.
-3. Routing and search work by prefix: `CM` matches all Cogent Marketing traffic, `CM.ABC` one client. The ICX object code is unchanged.
-4. Client codes are added to the private registry as clients are onboarded.
-5. Messages to outside agents (any ICOM line that leaves the fleet, e.g. to a partner firm's agent or a separate bot account) MUST also carry plain-word tokens `co=<company-words>` `cl=<client-words>` `topic=<topic-words>` (lowercase, hyphenated, e.g. `co=cogent-marketing cl=abc topic=voice-intake-config`) plus `icx=<spec version>`. Internal fleet messages keep short codes only. Each outside agent only ever receives its own client's name.
-6. Client registry is PRIVATE: this repo publishes only the three company codes and the topic codebook, never client names or client codes. Ship `clients.example.yaml` (placeholder codes such as `ABC`/`XYZ` with `company: CM`). The validator loads a real registry from `--clients PATH` or the `ICX_CLIENTS` env var. Real registry filenames (`clients.yaml`, `clients.local.yaml`) are gitignored.
+1. The CLIENT/LANE slot is `COMPANY.CLIENT`. Agents write company shorthand in the header, e.g. `CM.ABC`, `IN.INT0`. Each public company record has `short` (2-letter, used in headers and tokens) and `full` (canonical). Lookup table: `IN` -> `I-MD-XXXX` (Iron Noodle LLC, state unverified); `CM` -> `C-TBD-XXXX` (Cogent Marketing LLC, TBD); `CD` -> `C-TBD-XXXX` (Cogent Digital LLC, TBD). The validator accepts registered shorthand or the full code, and expands shorthand to full code in parsed output. An unregistered shorthand is NAKed like an unregistered ICX code (`why=icx.co.unk`). `INT0` = internal/no client lane, valid under any company (default `IN.INT0`).
+2. Backward compatible: a bare registered customer shorthand (e.g. `ABC`) stays valid. The router/validator resolves its company from the private customer registry. Default parent company is `CM` (Cogent Marketing) unless the registry says otherwise.
+3. Routing and search work by prefix on the company token: `CM` matches all Cogent Marketing traffic, `CM.ABC` one customer. Do not treat `C` alone as unique (both Cogent entities share that letter; they are told apart by state and EIN last four). The ICX object code is unchanged.
+4. Customer records are added to the private registry as customers are onboarded. Each record has `id` (numeric, canonical), `short` (what agents write in the client half of the slot and in tokens), `company` (company shorthand), and `name`. Real id and shorthand assignments are TBD. The registry is the lookup for expanding customer shorthand to customer ID. Unregistered customer shorthand is NAKed like an unregistered ICX code (`why=icx.cl.unk`).
+5. Messages to outside agents (any ICOM line that leaves the fleet, e.g. to a partner firm's agent or a separate bot account) MUST also carry plain-word tokens `co=<company-words>` `cl=<client-words>` `topic=<topic-words>` (lowercase, hyphenated, e.g. `co=cogent-marketing cl=abc topic=voice-intake-config`) plus `icx=<spec version>`. Internal fleet messages keep short codes only. Each outside agent only ever receives shorthand codes for its own clients.
+6. The customer table (ids, shorthand, names) and real EIN last four are PRIVATE. This repo publishes only the company shorthand table (with `XXXX` in the full code) and the topic codebook. Ship `clients.example.yaml` with fake placeholders (`id: 0000`, `short: ABC`, `name: Example Client`, `ein4: "0000"`). The validator loads a real registry from `--clients PATH` or the `ICX_CLIENTS` env var. Real registry filenames (`clients.yaml`, `clients.local.yaml`) are gitignored. Duplicate customer ids or duplicate customer shorthand in a registry are rejected.
 
-Unknown company prefix: NAK `why=icx.co.unk`. Unknown client, when a registry is loaded: NAK `why=icx.cl.unk`. Without a registry, a bare client code passes with a warning. Outbound lines missing `co=`, `cl=`, `topic=`, or `icx=` NAK `why=icx.ext.tok`.
+Unknown company shorthand or full code: NAK `why=icx.co.unk`. Unknown customer shorthand, when a registry is loaded: NAK `why=icx.cl.unk`. Without a registry, a bare customer shorthand passes with a warning. Outbound lines missing `co=`, `cl=`, `topic=`, or `icx=` NAK `why=icx.ext.tok`.
 
 ## Example messages (ICOM header)
 
@@ -144,8 +150,8 @@ ICX is about precision and routing, not compression. Word segments cost about th
 |---|---|
 | `examples/codebook.yaml` | Example codebook: companies, classes, work-state verbs, codes, facets, tombstones |
 | `examples/index.yaml` | Example relative index |
-| `clients.example.yaml` | Placeholder private client registry (`ABC`/`XYZ` under `CM`). Copy to `clients.yaml`. |
-| `tools/icx_validate.py` | Validator: segment rules, depth, parent prefixes, verbs, facets, tombstones, index targets, company/client slot, outbound tokens |
+| `clients.example.yaml` | Placeholder private customer registry (fake `id` / `short` / `name`, `company: CM`). Copy to `clients.yaml`. |
+| `tools/icx_validate.py` | Validator: segment rules, depth, parent prefixes, verbs, facets, tombstones, index targets, company shorthand/full, customer id, outbound tokens |
 | `tests/test_icx_validate.py` | Validator tests (codebook, Rule 14a slot, outbound) |
 
 ```bash
@@ -159,7 +165,7 @@ Optional flags: `--clients PATH` (or `ICX_CLIENTS`), `--outbound`, `--line 'ICOM
 
 ## Changelog
 
-- **1.2.0** (2026-11-04): Rule 14a company and client designation. Public `companies` (`IN`, `CM`, `CD`). `CO.CLIENT` slot, private client registry, outbound `co=` `cl=` `topic=` `icx=` tokens. Spec minor bump; existing ICX object codes unchanged.
+- **1.2.0** (2026-11-04): Rule 14a company and client designation. Company shorthand table (`IN`/`CM`/`CD`) expands to full codes (`I-MD-XXXX`, `C-TBD-XXXX`). Private customer registry maps numeric `id` to `short` (placeholders only; real assignments TBD). `CO.CLIENT` slot, outbound `co=` `cl=` `topic=` `icx=` tokens. Spec minor bump; existing ICX object codes unchanged.
 - **1.1.0** (2026-10-25): Publish ICOM work-state verbs and ICX class labels.
 - **1.0.0** (2026-10-19): ICX v1 spec, example codebook and index, validator.
 

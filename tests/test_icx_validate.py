@@ -32,6 +32,14 @@ def case(name):
     return deco
 
 
+def book():
+    cb = V.load_yaml(CB)["icx"]
+    errors = []
+    out = V.collect_companies(cb, errors)
+    assert not errors, errors
+    return out
+
+
 def run(clients=None, lines=None, outbound=False):
     return V.validate(
         CB, IDX, clients_path=clients, lines=lines, outbound=outbound,
@@ -94,34 +102,54 @@ def _():
     assert "codes" in out and "verbs" in out
 
 
-@case("companies-in-codebook")
+@case("companies-short-and-full")
 def _():
     cb = V.load_yaml(CB)["icx"]
     assert cb["version"] == "1.2.0"
-    got = {c["code"]: c["name"] for c in cb["companies"]}
-    assert got == {
-        "IN": "Iron Noodle LLC",
-        "CM": "Cogent Marketing LLC",
-        "CD": "Cogent Digital LLC",
-    }
+    by_short = {c["short"]: c for c in cb["companies"]}
+    assert by_short["IN"]["full"] == "I-MD-XXXX"
+    assert by_short["IN"]["name"] == "Iron Noodle LLC"
+    assert by_short["IN"]["status"] == "unverified"
+    assert by_short["CM"]["full"] == "C-TBD-XXXX"
+    assert by_short["CM"]["status"] == "tbd"
+    assert by_short["CD"]["full"] == "C-TBD-XXXX"
+    assert by_short["CD"]["status"] == "tbd"
+    assert by_short["CM"]["full"] == by_short["CD"]["full"]
 
 
-# --- Rule 14a client slot ---
+# --- Rule 14a client slot: shorthand and full ---
 
-@case("company-dot-client-ok")
+@case("shorthand-company-dot-client-ok")
 def _():
-    code, errors, warnings, _ = run(clients=CL_EX, lines=[hdr("CM.ABC")])
+    code, errors, warnings, stats = run(clients=CL_EX, lines=[hdr("CM.ABC")])
     assert_ok(code, errors)
+    p = stats["parsed"][0]
+    assert p["company_short"] == "CM", p
+    assert p["company_full"] == "C-TBD-XXXX", p
+    assert p["client_short"] == "ABC", p
+    assert p["client_id"] == "0000", p
+    assert p["resolved"] == "C-TBD-XXXX.0000", p
 
 
-@case("bare-registered-client-ok")
+@case("full-company-dot-client-ok")
 def _():
-    code, errors, warnings, _ = run(clients=CL_EX, lines=[hdr("ABC")])
+    code, errors, warnings, stats = run(
+        clients=CL_EX, lines=[hdr("C-TBD-XXXX.ABC")],
+    )
     assert_ok(code, errors)
-    resolved, e, w = V.resolve_client_slot("ABC", {"IN": {}, "CM": {}, "CD": {}},
-                                           V.load_clients(CL_EX)[0])
-    assert resolved == "CM.ABC", resolved
-    assert not e
+    p = stats["parsed"][0]
+    assert p["company_full"] == "C-TBD-XXXX", p
+    assert p["client_id"] == "0000", p
+
+
+@case("bare-registered-client-expands")
+def _():
+    code, errors, warnings, stats = run(clients=CL_EX, lines=[hdr("ABC")])
+    assert_ok(code, errors)
+    p = stats["parsed"][0]
+    assert p["company_short"] == "CM", p
+    assert p["company_full"] == "C-TBD-XXXX", p
+    assert p["client_id"] == "0000", p
 
 
 @case("bare-xyz-ok")
@@ -132,27 +160,51 @@ def _():
 
 @case("int0-under-any-company")
 def _():
-    for slot in ("IN.INT0", "CM.INT0", "CD.INT0", "INT0"):
-        code, errors, warnings, _ = run(clients=CL_EX, lines=[hdr(slot, verb="GO", obj="org.proto")])
+    for slot in ("IN.INT0", "CM.INT0", "CD.INT0", "INT0", "I-MD-XXXX.INT0"):
+        code, errors, warnings, _ = run(
+            clients=CL_EX, lines=[hdr(slot, verb="GO", obj="org.proto")],
+        )
         assert_ok(code, errors)
 
 
 @case("int0-default-is-in-int0")
 def _():
-    resolved, e, w = V.resolve_client_slot(
-        "INT0", {"IN": {}, "CM": {}, "CD": {}}, None,
-    )
-    assert resolved == "IN.INT0", resolved
-    assert not e
+    parsed, e, w = V.resolve_client_slot("INT0", book(), None)
+    assert not e, e
+    assert parsed["company_short"] == "IN", parsed
+    assert parsed["company_full"] == "I-MD-XXXX", parsed
+    assert parsed["resolved"] == "I-MD-XXXX.INT0", parsed
 
 
-@case("company-prefix-matches-all-clients")
+@case("company-shorthand-prefix-matches-all-clients")
 def _():
-    code, errors, warnings, _ = run(clients=CL_EX, lines=[hdr("CM")])
+    code, errors, warnings, stats = run(clients=CL_EX, lines=[hdr("CM")])
     assert_ok(code, errors)
+    p = stats["parsed"][0]
+    assert p["company_short"] == "CM", p
+    assert p["company_full"] == "C-TBD-XXXX", p
+    assert p["client_short"] is None, p
 
 
-@case("unknown-company-prefix")
+@case("expand-shorthand-in-to-full")
+def _():
+    parsed, e, w = V.resolve_client_slot("IN.INT0", book(), None)
+    assert not e, e
+    assert parsed["company_short"] == "IN"
+    assert parsed["company_full"] == "I-MD-XXXX"
+    assert parsed["resolved"] == "I-MD-XXXX.INT0"
+
+
+@case("letter-c-alone-not-unique")
+def _():
+    code, errors, warnings, _ = run(clients=CL_EX, lines=[hdr("C.ABC")])
+    assert code == 1
+    assert_why(errors, "why=icx.co.unk")
+    parsed, e, w = V.resolve_client_slot("C", book(), None)
+    assert e and "why=icx.co.unk" in " ".join(e), e
+
+
+@case("unknown-company-shorthand")
 def _():
     code, errors, warnings, _ = run(clients=CL_EX, lines=[hdr("ZZ.ABC")])
     assert code == 1
@@ -195,11 +247,14 @@ def _():
     assert_why(errors, "why=icx.co.unk")
 
 
-@case("company-dot-client-without-registry-warns")
+@case("shorthand-without-registry-warns")
 def _():
-    code, errors, warnings, _ = run(lines=[hdr("CM.ABC")])
+    code, errors, warnings, stats = run(lines=[hdr("CM.ABC")])
     assert_ok(code, errors)
     assert any("why=icx.cl.warn" in w for w in warnings), warnings
+    p = stats["parsed"][0]
+    assert p["company_full"] == "C-TBD-XXXX", p
+    assert p["client_id"] is None, p
 
 
 # --- outbound tokens ---
@@ -264,10 +319,25 @@ def _():
 
 @case("example-registry-loads")
 def _():
-    reg, errors = V.load_clients(CL_EX)
+    by_short, errors = V.load_clients(CL_EX)
     assert not errors, errors
-    assert "ABC" in reg and reg["ABC"]["company"] == "CM"
-    assert "XYZ" in reg and reg["XYZ"]["company"] == "CM"
+    assert "ABC" in by_short
+    assert by_short["ABC"]["company"] == "CM"
+    assert by_short["ABC"]["id"] == "0000"
+    assert by_short["ABC"]["name"] == "Example Client"
+    assert "XYZ" in by_short and by_short["XYZ"]["id"] == "0001"
+
+
+@case("private-ein4-overlay")
+def _():
+    customers, ein, errors = V.load_private_registry(CL_EX)
+    assert not errors, errors
+    assert ein["IN"] == "0000"
+    parsed, e, w = V.resolve_client_slot(
+        "IN.INT0", book(), customers, ein_overlay=ein,
+    )
+    assert not e, e
+    assert parsed["company_full"] == "I-MD-0000", parsed
 
 
 @case("clients-flag-and-env")
@@ -290,12 +360,15 @@ def _():
 @case("list-shaped-registry")
 def _():
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-        f.write("clients:\n  - {code: ABC, company: CM}\n")
+        f.write(
+            "clients:\n"
+            "  - {id: '0000', short: ABC, company: CM, name: Example Client}\n"
+        )
         path = f.name
     try:
-        reg, errors = V.load_clients(path)
+        by_short, errors = V.load_clients(path)
         assert not errors, errors
-        assert reg["ABC"]["company"] == "CM"
+        assert by_short["ABC"]["company"] == "CM"
         code, err, _, _ = run(clients=path, lines=[hdr("ABC")])
         assert_ok(code, err)
     finally:
@@ -305,16 +378,61 @@ def _():
 @case("default-company-cm-when-omitted")
 def _():
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
-        f.write("clients:\n  ABC: {}\n")
+        f.write("clients:\n  - {id: '0000', short: ABC, name: Example Client}\n")
         path = f.name
     try:
-        resolved, e, w = V.resolve_client_slot(
-            "ABC", {"IN": {}, "CM": {}, "CD": {}}, V.load_clients(path)[0],
-        )
-        assert resolved == "CM.ABC", resolved
-        assert not e
+        customers, ein, errors = V.load_private_registry(path)
+        assert not errors, errors
+        parsed, e, w = V.resolve_client_slot("ABC", book(), customers)
+        assert not e, e
+        assert parsed["company_short"] == "CM", parsed
+        assert parsed["company_full"] == "C-TBD-XXXX", parsed
+        assert parsed["client_id"] == "0000", parsed
     finally:
         os.remove(path)
+
+
+@case("duplicate-customer-shorthand-rejected")
+def _():
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        f.write(
+            "clients:\n"
+            "  - {id: '0000', short: ABC, company: CM, name: Example Client}\n"
+            "  - {id: '0002', short: ABC, company: CM, name: Other}\n"
+        )
+        path = f.name
+    try:
+        _cust, _ein, errors = V.load_private_registry(path)
+        assert any("duplicate client shorthand" in e for e in errors), errors
+    finally:
+        os.remove(path)
+
+
+@case("duplicate-customer-id-rejected")
+def _():
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        f.write(
+            "clients:\n"
+            "  - {id: '0000', short: ABC, company: CM, name: Example Client}\n"
+            "  - {id: '0000', short: XYZ, company: CM, name: Other}\n"
+        )
+        path = f.name
+    try:
+        _cust, _ein, errors = V.load_private_registry(path)
+        assert any("duplicate client id" in e for e in errors), errors
+    finally:
+        os.remove(path)
+
+
+@case("company-full-form-regex")
+def _():
+    assert V.CO_PROD.match("I-MD-XXXX")
+    assert V.CO_PROD.match("I-MD-0000")
+    assert not V.CO_PROD.match("C-TBD-XXXX")
+    assert V.CO_SEG.match("C-TBD-XXXX")
+    assert not V.is_company_form("IN")
+    assert not V.is_company_form("C")
+    assert not V.is_company_form("I-MD-XXXXX")
 
 
 if __name__ == "__main__":

@@ -24,7 +24,11 @@ import sys
 import yaml
 
 SEG = re.compile(r"^[a-z][a-z0-9]{0,5}$")
-CO_SEG = re.compile(r"^[A-Z][A-Z0-9]{0,5}$")
+# Production company full code: <letter>-<2-letter state>-<EIN last four or XXXX>.
+# TBD is the pending-state token until a 2-letter state is assigned.
+CO_PROD = re.compile(r"^[A-Z]-[A-Z]{2}-(\d{4}|XXXX)$")
+CO_SEG = re.compile(r"^[A-Z]-(?:[A-Z]{2}|TBD)-(\d{4}|XXXX)$")
+CO_SHORT = re.compile(r"^[A-Z]{2}$")
 CL_SEG = re.compile(r"^[A-Z][A-Z0-9]{0,5}$")
 WORD_TOK = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MAX_DEPTH = 4
@@ -67,50 +71,21 @@ def load_yaml(path):
         return yaml.safe_load(f)
 
 
-def load_clients(path):
-    """Load a private client registry.
+def is_company_form(code):
+    """True if code matches the Rule 14a full company form (or pending TBD)."""
+    return bool(code) and bool(CO_SEG.match(code))
 
-    Accepted shapes:
-      clients:
-        ABC: {company: CM}
-      clients:
-        - {code: ABC, company: CM}
-    Missing company defaults to CM. INT0 is always valid and need not appear.
-    """
-    data = load_yaml(path) or {}
-    raw = data.get("clients", data)
-    registry = {}
-    errors = []
-    if raw is None:
-        return registry, errors
-    if isinstance(raw, dict):
-        items = []
-        for code, meta in raw.items():
-            if meta is None:
-                meta = {}
-            if not isinstance(meta, dict):
-                errors.append(f"client '{code}' must map to a mapping")
-                continue
-            items.append((str(code), meta))
-    elif isinstance(raw, list):
-        items = []
-        for meta in raw:
-            if not isinstance(meta, dict) or not meta.get("code"):
-                errors.append(f"client entry missing code: {meta}")
-                continue
-            items.append((str(meta["code"]), meta))
-    else:
-        errors.append("clients registry must be a mapping or a list")
-        return registry, errors
 
-    for code, meta in items:
-        if not CL_SEG.match(code):
-            errors.append(f"bad client code '{code}' (upper, <=6 chars)")
-        company = meta.get("company", DEFAULT_CLIENT_COMPANY)
-        if code in registry:
-            errors.append(f"duplicate client: {code}")
-        registry[code] = {"company": company, **meta}
-    return registry, errors
+def apply_ein4(full, ein4):
+    """Replace the XXXX (or pending) tail of a full code with four digits."""
+    if not full or not ein4:
+        return full
+    letter, state, _tail = full.split("-", 2)
+    return "%s-%s-%s" % (letter, state, ein4)
+
+
+def empty_companies():
+    return {"by_short": {}, "by_full": {}, "records": []}
 
 
 def collect_codes(cb, errors):
@@ -138,19 +113,35 @@ def collect_verbs(cb, errors):
 
 
 def collect_companies(cb, errors):
-    companies = {}
+    """Build the public company book: shorthand -> full code.
+
+    Full codes may repeat (CM and CD both map to C-TBD-XXXX). Shorthand
+    is unique. The first letter of a full code is never treated as unique.
+    """
+    book = empty_companies()
     for c in cb.get("companies", []):
-        code = c.get("code")
+        short = c.get("short")
+        full = c.get("full") or c.get("code")
         name = c.get("name")
-        if not code or not name:
-            errors.append(f"company missing code or name: {c}")
+        if not short or not full or not name:
+            errors.append(f"company missing short, full, or name: {c}")
             continue
-        if not CO_SEG.match(code):
-            errors.append(f"bad company '{code}' (upper, <=6 chars)")
-        if code in companies:
-            errors.append(f"duplicate company: {code}")
-        companies[code] = c
-    return companies
+        if not CO_SHORT.match(short):
+            errors.append(f"bad company shorthand '{short}' (two A-Z letters)")
+        if not is_company_form(full):
+            errors.append(
+                f"bad company full '{full}' "
+                f"(L-ST-#### / L-ST-XXXX, or L-TBD-XXXX while pending)"
+            )
+        if short in book["by_short"]:
+            errors.append(f"duplicate company shorthand: {short}")
+        rec = dict(c)
+        rec["short"] = short
+        rec["full"] = full
+        book["by_short"][short] = rec
+        book["by_full"].setdefault(full, []).append(short)
+        book["records"].append(rec)
+    return book
 
 
 def check_codes(codes, tomb, errors):
@@ -191,72 +182,317 @@ def check_index(idx, codes, facets, errors):
             errors.append(f"index '{term}' -> unknown facet ~{facet}")
 
 
-def resolve_client_slot(slot, companies, registry):
+def load_private_registry(path):
+    """Load the private customer + EIN overlay registry.
+
+    customers:
+      - {id: 0000, short: ABC, company: CM, name: Example Client}
+    companies:
+      IN: {ein4: "0000"}   # fake last-four overlay for I-MD-XXXX
+
+    Rejects duplicate customer ids and duplicate customer shorthand.
+    """
+    data = load_yaml(path) or {}
+    errors = []
+    customers = {"by_short": {}, "by_id": {}}
+    ein_overlay = {}
+
+    raw_co = data.get("companies")
+    if isinstance(raw_co, dict):
+        for key, meta in raw_co.items():
+            if not isinstance(meta, dict):
+                errors.append(f"private company '{key}' must map to a mapping")
+                continue
+            ein4 = meta.get("ein4")
+            if ein4 is None:
+                continue
+            ein4 = str(ein4).strip()
+            if not re.fullmatch(r"\d{4}", ein4):
+                errors.append(f"bad ein4 for '{key}' (four digits, fake in examples)")
+                continue
+            ein_overlay[str(key)] = ein4
+    elif raw_co is not None:
+        errors.append("private companies must be a mapping of shorthand or full code")
+
+    raw = data.get("clients")
+    if raw is None:
+        return customers, ein_overlay, errors
+
+    items = []
+    if isinstance(raw, dict):
+        for key, meta in raw.items():
+            if meta is None:
+                meta = {}
+            if not isinstance(meta, dict):
+                errors.append(f"client '{key}' must map to a mapping")
+                continue
+            rec = dict(meta)
+            rec.setdefault("short", str(key))
+            items.append(rec)
+    elif isinstance(raw, list):
+        for meta in raw:
+            if not isinstance(meta, dict):
+                errors.append(f"client entry must be a mapping: {meta}")
+                continue
+            items.append(dict(meta))
+    else:
+        errors.append("clients registry must be a mapping or a list")
+        return customers, ein_overlay, errors
+
+    for rec in items:
+        short = rec.get("short") or rec.get("code")
+        cid = rec.get("id")
+        company = rec.get("company", DEFAULT_CLIENT_COMPANY)
+        name = rec.get("name")
+        if short is None or cid is None:
+            errors.append(f"client missing id or short: {rec}")
+            continue
+        short = str(short)
+        cid_s = str(cid).strip()
+        if not re.fullmatch(r"\d+", cid_s):
+            errors.append(f"client id '{cid}' must be numeric")
+            continue
+        if not CL_SEG.match(short):
+            errors.append(f"bad client shorthand '{short}' (upper, <=6 chars)")
+        if not CO_SHORT.match(str(company)) and not is_company_form(str(company)):
+            errors.append(f"bad client company '{company}'")
+        id_key = str(int(cid_s))
+        if short in customers["by_short"]:
+            errors.append(f"duplicate client shorthand: {short} why=icx.cl.unk")
+        if id_key in customers["by_id"]:
+            errors.append(f"duplicate client id: {cid_s} why=icx.cl.unk")
+        entry = {
+            "id": cid_s,
+            "short": short,
+            "company": str(company),
+            "name": name,
+        }
+        customers["by_short"][short] = entry
+        customers["by_id"][id_key] = entry
+    return customers, ein_overlay, errors
+
+
+def load_clients(path):
+    """Back-compat wrapper: short -> record, including company."""
+    customers, _ein, errors = load_private_registry(path)
+    return customers["by_short"], errors
+
+
+def full_for_short(short, book, ein_overlay=None):
+    rec = book["by_short"].get(short)
+    if not rec:
+        return None
+    full = rec["full"]
+    overlay = ein_overlay or {}
+    if short in overlay:
+        return apply_ein4(full, overlay[short])
+    if full in overlay:
+        return apply_ein4(full, overlay[full])
+    return full
+
+
+def resolve_company(token, book, ein_overlay=None):
+    """Map a company token to (short, full) or errors.
+
+    Accepts registered shorthand (IN, CM, CD) or a registered full code.
+    A single letter is never unique (C is shared by both Cogent entities).
+    """
+    errors = []
+    if not token:
+        errors.append("empty company why=icx.co.unk")
+        return None, None, errors
+    if token in book["by_short"]:
+        return token, full_for_short(token, book, ein_overlay), errors
+    if token in book["by_full"]:
+        shorts = book["by_full"][token]
+        short = shorts[0] if len(shorts) == 1 else None
+        full = token
+        overlay = ein_overlay or {}
+        if short and short in overlay:
+            full = apply_ein4(full, overlay[short])
+        elif token in overlay:
+            full = apply_ein4(full, overlay[token])
+        return short, full, errors
+    # Private EIN overlay: I-MD-0000 resolves back to I-MD-XXXX / IN.
+    overlay = ein_overlay or {}
+    for short, ein4 in overlay.items():
+        public_full = None
+        if short in book["by_short"]:
+            public_full = book["by_short"][short]["full"]
+        elif short in book["by_full"]:
+            public_full = short
+        if not public_full:
+            continue
+        if apply_ein4(public_full, ein4) == token:
+            resolved_short = short if short in book["by_short"] else (
+                book["by_full"][public_full][0]
+                if public_full in book["by_full"]
+                and len(book["by_full"][public_full]) == 1
+                else None
+            )
+            return resolved_short, token, errors
+    errors.append(f"unknown company '{token}' why=icx.co.unk")
+    return None, None, errors
+
+
+def make_parsed(slot, company_short, company_full, client_short, client_id=None):
+    resolved_client = client_id if client_id is not None else client_short
+    if company_full and resolved_client:
+        resolved = "%s.%s" % (company_full, resolved_client)
+    else:
+        resolved = company_full or slot
+    return {
+        "input": slot,
+        "company_short": company_short,
+        "company_full": company_full,
+        "client_short": client_short,
+        "client_id": client_id,
+        "resolved": resolved,
+    }
+
+
+def resolve_client_slot(slot, companies, registry, ein_overlay=None):
     """Resolve a CLIENT/LANE slot.
 
-    Returns (resolved, errors, warnings). resolved is COMPANY.CLIENT or a
-    bare registered company code (prefix match for all that company's traffic).
+    Headers use shorthand (IN.INT0, CM.ABC). Full codes are also accepted.
+    Parsed output expands company shorthand to full code, and (when a
+    registry is loaded) customer shorthand to numeric id.
+
+    Returns (parsed, errors, warnings).
     """
     errors, warnings = [], []
     if not slot:
-        errors.append(f"empty client slot why=icx.cl.unk")
+        errors.append("empty client slot why=icx.cl.unk")
         return None, errors, warnings
+
+    # Company book may be the new dict or a plain short->rec mapping used in tests.
+    if isinstance(companies, dict) and "by_short" in companies:
+        book = companies
+    else:
+        book = empty_companies()
+        for k, rec in (companies or {}).items():
+            rec = dict(rec) if isinstance(rec, dict) else {}
+            rec.setdefault("short", k)
+            rec.setdefault("full", rec.get("code") or k)
+            book["by_short"][k] = rec
+            book["by_full"].setdefault(rec["full"], []).append(k)
+            book["records"].append(rec)
+
+    customers = None
+    if registry is None:
+        customers = None
+    elif isinstance(registry, dict) and "by_short" in registry:
+        customers = registry
+    else:
+        customers = {"by_short": registry or {}, "by_id": {}}
+
+    def lookup_customer(token):
+        if customers is None:
+            return None
+        return customers["by_short"].get(token)
 
     if "." in slot:
         company, client, *extra = slot.split(".")
         if extra:
             errors.append(f"bad client slot '{slot}' why=icx.cl.unk")
             return None, errors, warnings
-        if company not in companies:
-            errors.append(f"unknown company '{company}' why=icx.co.unk")
+        c_short, c_full, c_err = resolve_company(company, book, ein_overlay)
+        errors.extend(c_err)
+        if c_err:
             return None, errors, warnings
         if client == INTERNAL_CLIENT:
-            return f"{company}.{INTERNAL_CLIENT}", errors, warnings
-        if registry is None:
+            return (
+                make_parsed(slot, c_short, c_full, INTERNAL_CLIENT, None),
+                errors, warnings,
+            )
+        if customers is None:
             if not CL_SEG.match(client):
                 errors.append(f"bad client code '{client}' why=icx.cl.unk")
                 return None, errors, warnings
             warnings.append(
                 f"client '{client}' not checked (no registry) why=icx.cl.warn"
             )
-            return f"{company}.{client}", errors, warnings
-        if client not in registry:
+            return (
+                make_parsed(slot, c_short, c_full, client, None),
+                errors, warnings,
+            )
+        rec = lookup_customer(client)
+        if rec is None:
             errors.append(f"unknown client '{client}' why=icx.cl.unk")
             return None, errors, warnings
-        parent = registry[client].get("company", DEFAULT_CLIENT_COMPANY)
-        if parent != company:
+        parent = rec.get("company", DEFAULT_CLIENT_COMPANY)
+        p_short, p_full, p_err = resolve_company(parent, book, ein_overlay)
+        if p_err:
+            errors.extend(p_err)
+            return None, errors, warnings
+        if c_short and p_short and c_short != p_short:
             errors.append(
                 f"client '{client}' is not under '{company}' why=icx.cl.unk"
             )
             return None, errors, warnings
-        return f"{company}.{client}", errors, warnings
+        if not c_short and c_full and p_full and c_full != p_full:
+            errors.append(
+                f"client '{client}' is not under '{company}' why=icx.cl.unk"
+            )
+            return None, errors, warnings
+        return (
+            make_parsed(slot, p_short or c_short, c_full or p_full,
+                        rec["short"], rec["id"]),
+            errors, warnings,
+        )
 
-    # Bare token: company prefix, INT0, or a client code.
-    if slot in companies:
-        return slot, errors, warnings
+    # Bare token: company shorthand/full, INT0, or a customer shorthand.
     if slot == INTERNAL_CLIENT:
-        return DEFAULT_INTERNAL, errors, warnings
-    if registry is None:
+        d_short, d_full, d_err = resolve_company("IN", book, ein_overlay)
+        errors.extend(d_err)
+        return (
+            make_parsed(slot, d_short or "IN", d_full or "I-MD-XXXX",
+                        INTERNAL_CLIENT, None),
+            errors, warnings,
+        )
+    c_short, c_full, c_err = resolve_company(slot, book, ein_overlay)
+    if not c_err:
+        return make_parsed(slot, c_short, c_full, None, None), errors, warnings
+    # A single letter is never a unique company (C is shared by both Cogent
+    # entities). Two-letter tokens that are not registered shorthand are
+    # unknown companies, not customers.
+    if len(slot) == 1 or (CO_SHORT.match(slot) and slot not in book["by_short"]):
+        errors.append(f"unknown company '{slot}' why=icx.co.unk")
+        return None, errors, warnings
+    if customers is None:
         if not CL_SEG.match(slot):
-            errors.append(f"bad client code '{slot}' why=icx.cl.unk")
+            errors.append(f"unknown company '{slot}' why=icx.co.unk")
             return None, errors, warnings
         warnings.append(
             f"client '{slot}' not checked (no registry) why=icx.cl.warn"
         )
-        return f"{DEFAULT_CLIENT_COMPANY}.{slot}", errors, warnings
-    if slot not in registry:
+        p_short, p_full, p_err = resolve_company(
+            DEFAULT_CLIENT_COMPANY, book, ein_overlay,
+        )
+        errors.extend(p_err)
+        return (
+            make_parsed(slot, p_short, p_full, slot, None),
+            errors, warnings,
+        )
+    rec = lookup_customer(slot)
+    if rec is None:
         errors.append(f"unknown client '{slot}' why=icx.cl.unk")
         return None, errors, warnings
-    parent = registry[slot].get("company", DEFAULT_CLIENT_COMPANY)
-    if parent not in companies:
-        errors.append(f"unknown company '{parent}' why=icx.co.unk")
+    p_short, p_full, p_err = resolve_company(
+        rec.get("company", DEFAULT_CLIENT_COMPANY), book, ein_overlay,
+    )
+    errors.extend(p_err)
+    if p_err:
         return None, errors, warnings
-    return f"{parent}.{slot}", errors, warnings
+    return (
+        make_parsed(slot, p_short, p_full, rec["short"], rec["id"]),
+        errors, warnings,
+    )
 
 
 def check_object_token(obj, codes, facets, errors):
     if not obj:
-        errors.append(f"missing object why=icx.unk")
+        errors.append("missing object why=icx.unk")
         return
     base, facet = split(obj)
     segs = base.split(".")
@@ -274,19 +510,22 @@ def check_object_token(obj, codes, facets, errors):
         errors.append(f"unknown facet ~{facet} why=icx.unk")
 
 
-def validate_line(line, companies, codes, facets, verb_codes, registry, outbound=False):
-    """Validate one ICOM header. Returns (errors, warnings)."""
+def validate_line(line, companies, codes, facets, verb_codes, registry,
+                  outbound=False, ein_overlay=None):
+    """Validate one ICOM header. Returns (errors, warnings, parsed)."""
     errors, warnings = [], []
     raw = line.strip()
     if not raw or raw.startswith("#"):
-        return errors, warnings
+        return errors, warnings, None
     m = LINE_RE.match(raw)
     if not m:
         errors.append(f"bad ICOM header: {raw}")
-        return errors, warnings
+        return errors, warnings, None
 
     slot = m.group("client")
-    _, slot_err, slot_warn = resolve_client_slot(slot, companies, registry)
+    parsed, slot_err, slot_warn = resolve_client_slot(
+        slot, companies, registry, ein_overlay=ein_overlay,
+    )
     errors.extend(slot_err)
     warnings.extend(slot_warn)
 
@@ -318,7 +557,7 @@ def validate_line(line, companies, codes, facets, verb_codes, registry, outbound
                         f"outbound {k}={kv[k]} must be lowercase-hyphenated "
                         f"why=icx.ext.tok"
                     )
-    return errors, warnings
+    return errors, warnings, parsed
 
 
 def read_lines(paths, extra):
@@ -349,30 +588,39 @@ def validate(codebook_path, index_path, clients_path=None, lines=None,
     check_index(idx, codes, facets, errors)
 
     registry = None
+    ein_overlay = None
     if clients_path:
-        registry, reg_err = load_clients(clients_path)
+        customers, ein_overlay, reg_err = load_private_registry(clients_path)
         errors.extend(reg_err)
-        for code, meta in registry.items():
-            parent = meta.get("company", DEFAULT_CLIENT_COMPANY)
-            if parent not in companies:
+        registry = customers
+        for short, rec in customers["by_short"].items():
+            parent = rec.get("company", DEFAULT_CLIENT_COMPANY)
+            p_short, _p_full, p_err = resolve_company(
+                parent, companies, ein_overlay,
+            )
+            if p_err:
                 errors.append(
-                    f"client '{code}' unknown company '{parent}' why=icx.co.unk"
+                    f"client '{short}' unknown company '{parent}' why=icx.co.unk"
                 )
+            rec["_company_short"] = p_short
 
+    parsed_lines = []
     line_count = 0
     for line in lines or []:
         if not line.strip() or line.strip().startswith("#"):
             continue
         line_count += 1
-        e, w = validate_line(
+        e, w, parsed = validate_line(
             line, companies, codes, facets, verb_codes, registry,
-            outbound=outbound,
+            outbound=outbound, ein_overlay=ein_overlay,
         )
         prefix = (line.strip()[:48] + "...") if len(line.strip()) > 48 else line.strip()
         for item in e:
             errors.append(f"{item} [{prefix}]")
         for item in w:
             warnings.append(f"{item} [{prefix}]")
+        if parsed:
+            parsed_lines.append(parsed)
 
     stats = {
         "codes": len(codes),
@@ -380,9 +628,10 @@ def validate(codebook_path, index_path, clients_path=None, lines=None,
         "facets": len(facets),
         "tomb": len(tomb),
         "index": len(idx),
-        "companies": len(companies),
-        "clients": 0 if registry is None else len(registry),
+        "companies": len(companies["records"]),
+        "clients": 0 if registry is None else len(registry["by_short"]),
         "lines": line_count,
+        "parsed": parsed_lines,
     }
     return (1 if errors else 0), errors, warnings, stats
 
@@ -400,6 +649,21 @@ def format_summary(errors, stats):
     )
 
 
+def format_parsed(parsed):
+    if not parsed:
+        return None
+    parts = ["parsed %s" % parsed["resolved"]]
+    if parsed.get("company_short"):
+        parts.append("co_short=%s" % parsed["company_short"])
+    if parsed.get("company_full"):
+        parts.append("co_full=%s" % parsed["company_full"])
+    if parsed.get("client_short"):
+        parts.append("cl_short=%s" % parsed["client_short"])
+    if parsed.get("client_id") is not None:
+        parts.append("cl_id=%s" % parsed["client_id"])
+    return " ".join(parts)
+
+
 def main(codebook_path, index_path, clients_path=None, lines=None,
          outbound=False):
     code, errors, warnings, stats = validate(
@@ -410,6 +674,10 @@ def main(codebook_path, index_path, clients_path=None, lines=None,
         print(f"WARN: {w}")
     for e in errors:
         print(e)
+    for parsed in stats.get("parsed") or []:
+        line = format_parsed(parsed)
+        if line:
+            print(line)
     print(format_summary(errors, stats))
     return code
 

@@ -1,5 +1,5 @@
-# Private client registry. This repo publishes company codes only.
-# Never commit real client names or client codes.
+# Private customer registry. This repo publishes company shorthand only.
+# Never commit real customer names, shorthand, numeric ids, or EIN last-four.
 clients.yaml
 **/clients.yaml
 !clients.example.yaml
