@@ -1,0 +1,11 @@
+# Private customer registry. This repo publishes company shorthand only.
+# Never commit real customer names, shorthand, numeric ids, or EIN last-four.
+clients.yaml
+**/clients.yaml
+!clients.example.yaml
+!**/clients.example.yaml
+clients.local.yaml
+**/clients.local.yaml
+
+__pycache__/
+*.pyc

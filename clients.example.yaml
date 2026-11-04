@@ -1,0 +1,33 @@
+# Example private customer registry. Copy to clients.yaml (gitignored).
+# Never commit real customer names, shorthand, numeric ids, or EIN last-four.
+#
+# Schema (list form):
+#   clients:
+#     - id: <numeric customer id>
+#       short: <header/token shorthand>
+#       company: <company shorthand, e.g. CM>
+#       name: <customer name>
+#   companies:
+#     IN:
+#       ein4: "0000"    # fake last-four overlay for I-MD-XXXX
+#
+# Load with:  --clients clients.yaml   or   ICX_CLIENTS=clients.yaml
+# Default parent company shorthand is CM unless a client sets company.
+# INT0 (internal / no client) is valid under any company and is not a customer.
+#
+# All values below are fake placeholders. Real id and shorthand assignments
+# are TBD and live only in the private registry.
+
+companies:
+  IN:
+    ein4: "0000"
+
+clients:
+  - id: "0000"
+    short: ABC
+    company: CM
+    name: Example Client
+  - id: "0001"
+    short: XYZ
+    company: CM
+    name: Example Client B

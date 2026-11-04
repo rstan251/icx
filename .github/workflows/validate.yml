@@ -10,3 +10,5 @@ jobs:
           python-version: "3.12"
       - run: pip install pyyaml
       - run: python3 tools/icx_validate.py examples/codebook.yaml examples/index.yaml
+      - run: python3 tools/icx_validate.py examples/codebook.yaml examples/index.yaml --clients clients.example.yaml
+      - run: python3 tests/test_icx_validate.py
