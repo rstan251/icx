@@ -1,0 +1,12 @@
+# Example private client registry. Copy to clients.yaml (gitignored) and replace
+# the placeholder codes. Never commit real client names or client codes.
+#
+# Load with:  --clients clients.yaml   or   ICX_CLIENTS=clients.yaml
+# Default parent company is CM unless a client sets company.
+# INT0 (internal / no client) is valid under any company and need not be listed.
+
+clients:
+  ABC:
+    company: CM
+  XYZ:
+    company: CM

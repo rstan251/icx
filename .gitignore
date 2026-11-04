@@ -1,0 +1,11 @@
+# Private client registry. This repo publishes company codes only.
+# Never commit real client names or client codes.
+clients.yaml
+**/clients.yaml
+!clients.example.yaml
+!**/clients.example.yaml
+clients.local.yaml
+**/clients.local.yaml
+
+__pycache__/
+*.pyc

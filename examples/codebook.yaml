@@ -1,8 +1,12 @@
 # Example ICX codebook for a generic agent fleet. Replace owners and codes with your own.
-# Publishes the shared label set: 10 ICX top-level classes and 10 ICOM work-state verbs.
-# Lane/client codes are not part of ICX; they live in the ICOM codebook as placeholders.
+# Publishes the shared label set: 10 ICX top-level classes, 10 ICOM work-state verbs,
+# and the three company codes (Rule 14a). Client codes are private; see clients.example.yaml.
 icx:
-  version: 1.1.0
+  version: 1.2.0
+  companies:
+    - {code: IN, name: Iron Noodle LLC, words: iron-noodle}
+    - {code: CM, name: Cogent Marketing LLC, words: cogent-marketing}
+    - {code: CD, name: Cogent Digital LLC, words: cogent-digital}
   classes:
     - {code: org, name: "fleet, agents, rules, protocol", owner: chief-of-staff}
     - {code: pr,  name: "client products: voice, web, crm", owner: product-lead}
